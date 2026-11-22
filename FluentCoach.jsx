@@ -1,18 +1,17 @@
 /**
  * Fluent Coach - AI English coaching UI (front-end mockup)
  *
- * Single-file React component. Everything runs on local state and dummy data.
+ * Single-file React component. Runs entirely in the browser: a rule-based analyzer
+ * (COLLOCATION_RULES / UPGRADES below) checks whatever you type. No API key needed.
  * Stack: React 18 + Tailwind CSS (core utilities only) + lucide-react
+ * Design: editorial, square-cornered, hairline rules, heavy type on warm grey paper.
  *
  * Where to plug in a real backend:
- *   -> analyzeText(text): replace the stub below with a call to your LLM API
- *      and return an object shaped like MOCK_RESULT.
+ *   -> set API_ENDPOINT to a backend that wraps an LLM. It receives POST { text }
+ *      and must return the same shape as analyzeLocal().
  */
 import { useState, useEffect } from "react";
-import {
-  Sparkles, PenLine, BarChart3, BookMarked, Play, Pause, Volume2, ArrowRight,
-  Bookmark, BookmarkCheck, Eye, Lightbulb, Flame, RotateCcw, Loader2, Shuffle, Target, X,
-} from "lucide-react";
+import { Play, Pause, Eye, Loader2, Shuffle, RotateCcw } from "lucide-react";
 
 /* ------------------------------ Dummy data ------------------------------ */
 
@@ -24,43 +23,6 @@ const PROMPTS = [
   "Describe a small habit that has changed your daily life.",
   "Do you think remote work is here to stay? Why or why not?",
 ];
-
-// {{...}} marks a filler / discourse marker so it can be highlighted.
-const MOCK_RESULT = {
-  score: 64,
-  collocations: [
-    {
-      id: "c1", bad: "made a decision to go to a hiking", good: "ended up going hiking",
-      why: "「make a decision to ~」は文法的に正しいが硬く、日常会話では浮きます。hiking のような活動は go + -ing で冠詞も不要。「結局〜することになった」という気軽さは ended up -ing が運びます。",
-    },
-    {
-      id: "c2", bad: "The weather was very good", good: "We lucked out with the weather",
-      why: "good は評価するだけですが、lucked out には「運よく恵まれた」という含みがあります。get great weather / be blessed with も同系統です。",
-    },
-    {
-      id: "c3", bad: "I want to do it again", good: "I'm already itching to go again",
-      why: "do it again は直訳的です。itching to ~ は「うずうずしている」という身体感覚を伴い、気持ちの強さまで伝わります。",
-    },
-  ],
-  vocab: [
-    { id: "v1", from: "very beautiful", fromLv: "B1", to: "breathtaking", toLv: "C1",
-      ex: "The view from the ridge was absolutely breathtaking.",
-      note: "very + 形容詞を、それ自体が強い意味を持つ形容詞1語に置き換える。" },
-    { id: "v2", from: "very tired", fromLv: "B1", to: "wiped out", toLv: "C1",
-      ex: "I was completely wiped out by the time we got home.",
-      note: "exhausted より口語的。疲れ切って動けない感じ。" },
-    { id: "v3", from: "really happy", fromLv: "B2", to: "over the moon", toLv: "C2",
-      ex: "She was over the moon about the news.",
-      note: "「有頂天」を表す定番イディオム。elated はよりフォーマル。" },
-  ],
-  script: [
-    "{{So,}} last weekend I ended up going hiking with a few friends.",
-    "{{And, I mean,}} we totally lucked out with the weather.",
-    "The view from the top was just breathtaking, {{you know?}}",
-    "I was completely wiped out by the end, but {{honestly,}} it was so worth it.",
-    "{{Actually,}} I'm already itching to go again next month.",
-  ],
-};
 
 const INITIAL_BANK = [
   { id: "b1", type: "collocation", en: "make a point of doing", note: "〜するよう心がける", mastery: 2 },
@@ -77,30 +39,139 @@ const WEAKNESS = [
 ];
 const WEEK = [["月", 3], ["火", 5], ["水", 2], ["木", 6], ["金", 4], ["土", 0], ["日", 1]];
 
-// TODO: replace with a real API call (e.g. POST /api/analyze) returning MOCK_RESULT's shape.
-const analyzeText = () => new Promise((resolve) => setTimeout(() => resolve(MOCK_RESULT), 1400));
+/* ------------------------------ Analyzer ------------------------------ */
 
-/* ------------------------------ Small pieces ------------------------------ */
+// Optional: URL of your own backend that wraps an LLM. It receives POST { text } and must
+// return the same shape as analyzeLocal(). Leave empty to use the built-in rules below.
+const API_ENDPOINT = "";
 
-const LEVEL = {
-  B1: "border-slate-600 text-slate-400",
-  B2: "border-sky-500/50 text-sky-300",
-  C1: "border-amber-400/50 text-amber-300",
-  C2: "border-fuchsia-400/50 text-fuchsia-300",
+const MAX_COLLOCATIONS = 4;
+const MAX_VOCAB = 3;
+
+// [pattern, natural replacement ($1, $2 allowed), explanation]
+const COLLOCATION_RULES = [
+  [/\b(?:made|make|makes|making) a decision to\b/i, "decided to", "「make a decision to ~」は文法的には正しいものの硬い言い方です。会話では decide to ~ の1語で済ませるのが自然です。"],
+  [/\b(go|goes|going|went) to (?:a |an |the )?(hiking|shopping|swimming|fishing|camping|skiing|jogging|cycling|running)\b/i, "$1 $2", "hiking や shopping のような活動は go + -ing で表し、to も冠詞も付けません。"],
+  [/\bthe weather (?:was|is) (?:very |really )?(?:good|nice)\b/i, "we got great weather", "good は評価を述べるだけです。get great weather なら「天気に恵まれた」という運のニュアンスまで伝わります。"],
+  [/\bdo (?:a |some )?mistakes?\b/i, "make a mistake", "mistake は do ではなく make と結びつきます。"],
+  [/\bmake (?:my |the )?homework\b/i, "do my homework", "homework は make ではなく do と結びつきます。"],
+  [/\bsay (?:a )?jokes?\b/i, "tell a joke", "joke は say ではなく tell と結びつきます。"],
+  [/\bopen (?:a )?party\b/i, "throw a party", "パーティーを「開く」は open ではなく throw / have を使います。"],
+  [/\beat (?:a |the )?medicine\b/i, "take medicine", "薬は eat ではなく take を使います。"],
+  [/\btake (?:a )?rest\b/i, "take a break", "take a rest は不自然に響きます。休憩は take a break、休養は get some rest です。"],
+  [/\b(?:big|strong) (rain|snow)\b/i, "heavy $1", "雨や雪の強さは big / strong ではなく heavy で表します。"],
+];
+
+// adjective -> [upgrade, level, example, note]. Matched after very / really / so / extremely / pretty.
+const UPGRADES = {
+  beautiful: ["breathtaking", "C1", "The view from the ridge was absolutely breathtaking.", "very + 形容詞を、強い意味を持つ形容詞1語に置き換える。"],
+  tired: ["wiped out", "C1", "I was completely wiped out by the time we got home.", "exhausted より口語的。疲れ切って動けない感じ。"],
+  happy: ["over the moon", "C2", "She was over the moon about the news.", "「有頂天」を表す定番イディオム。"],
+  good: ["outstanding", "C1", "The service was outstanding.", "good を強めるより、1語で言い切るほうが引き締まる。"],
+  big: ["massive", "C1", "We have a massive deadline next week.", "huge より、くだけた場面でも書き言葉でも使いやすい。"],
+  important: ["crucial", "C1", "Sleep is crucial for memory.", "important よりも「決定的」という響きが強い。"],
+  difficult: ["daunting", "C1", "The task felt daunting at first.", "「気が遠くなるほど難しい」という心理面を含む。"],
+  hard: ["grueling", "C2", "It was a grueling week at work.", "体力や気力を削られる大変さ。"],
+  interesting: ["fascinating", "C1", "I found the lecture fascinating.", "引き込まれる感覚を含む。"],
+  surprised: ["taken aback", "C1", "I was taken aback by her answer.", "予想外で一瞬言葉に詰まる驚き。"],
+  angry: ["furious", "C1", "He was furious about the delay.", "very angry の代わりに1語で。"],
+  sad: ["heartbroken", "C1", "She was heartbroken when it ended.", "悲しみが深く、胸が痛む感じ。"],
+  busy: ["swamped", "C1", "I'm swamped with assignments this week.", "仕事や課題に埋もれている口語表現。"],
+  delicious: ["mouthwatering", "C1", "The ramen smelled mouthwatering.", "見た目や香りで食欲が湧く感じ。"],
+  hot: ["scorching", "C1", "It was a scorching afternoon.", "焼けつくような暑さ。"],
+  scared: ["terrified", "C1", "I was terrified of speaking in public.", "very scared よりも恐怖が強く、1語で言える。"],
+  excited: ["pumped", "C1", "I'm so pumped for the trip.", "くだけた会話で使う「気分が上がっている」。"],
+  funny: ["hilarious", "C1", "His story was hilarious.", "笑いが止まらないほどおかしい。"],
 };
+const UPGRADE_RE = new RegExp(`\\b(?:very|really|so|extremely|pretty) (${Object.keys(UPGRADES).join("|")})\\b`, "gi");
+
+const CONTRACTIONS = [
+  [/\bI am\b/g, "I'm"], [/\bI will\b/g, "I'll"], [/\bI have\b/g, "I've"], [/\bdo not\b/gi, "don't"],
+  [/\bdid not\b/gi, "didn't"], [/\bwas not\b/gi, "wasn't"], [/\bcannot\b/gi, "can't"],
+  [/\bit is\b/gi, "it's"], [/\bthat is\b/gi, "that's"],
+];
+
+// Fillers rotate by sentence. "pre" goes in front, "post" goes at the end. null = none.
+const FILLERS = [["pre", "So,"], null, ["pre", "I mean,"], ["post", "you know?"], ["pre", "honestly,"], ["pre", "Actually,"]];
+const LOWERABLE = /^(The|A|An|It|We|They|He|She|This|That|There|My|Our|Last|Next|Yesterday|Today|In|On|At|When|After|Before|Then|And|But|Also|Now|Here|You)\b/;
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// {{...}} marks a filler / discourse marker so the UI can highlight it.
+const toSpoken = (sentence, i) => {
+  let s = sentence.trim();
+  COLLOCATION_RULES.forEach(([re, to]) => { s = s.replace(re, to); });
+  s = s.replace(UPGRADE_RE, (_, adj) => UPGRADES[adj.toLowerCase()][0]);
+  CONTRACTIONS.forEach(([re, to]) => { s = s.replace(re, to); });
+  s = cap(s);
+  if (!/[.!?]$/.test(s)) s += ".";
+  const f = FILLERS[i % FILLERS.length];
+  if (!f) return s;
+  if (f[0] === "pre") return `{{${f[1]}}} ${LOWERABLE.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s}`;
+  return s.replace(/[.!?]$/, `, {{${f[1]}}}`);
+};
+
+const analyzeLocal = (text) => {
+  const found = [];
+  COLLOCATION_RULES.forEach(([re, to, why]) => {
+    const m = text.match(re);
+    if (!m) return;
+    const bad = m[0];
+    const good = bad.replace(re, to);
+    found.push({ at: m.index, end: m.index + bad.length, bad, good: /^[A-Z]/.test(bad) ? cap(good) : good, why });
+  });
+  found.sort((a, b) => a.at - b.at);
+  const collocations = found.slice(0, MAX_COLLOCATIONS).map((c, i) => ({ id: `c${i}`, bad: c.bad, good: c.good, why: c.why }));
+
+  const seen = new Set();
+  const vocab = [];
+  for (const m of text.matchAll(UPGRADE_RE)) {
+    const key = m[1].toLowerCase();
+    const overlaps = found.some((c) => m.index < c.end && m.index + m[0].length > c.at);
+    if (overlaps || seen.has(key)) continue;
+    seen.add(key);
+    const [to, toLv, ex, note] = UPGRADES[key];
+    vocab.push({ id: `v${vocab.length}`, from: m[0], fromLv: "B1", to, toLv, ex, note });
+  }
+
+  const sentences = (text.match(/[^.!?]+[.!?]*/g) || []).map((s) => s.trim()).filter(Boolean).slice(0, 6);
+  return {
+    score: Math.max(40, 100 - 8 * collocations.length - 5 * vocab.length),
+    collocations,
+    vocab: vocab.slice(0, MAX_VOCAB),
+    script: sentences.map(toSpoken),
+  };
+};
+
+const analyzeText = async (text) => {
+  if (API_ENDPOINT) {
+    const res = await fetch(API_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!res.ok) throw new Error(`API error ${res.status}`);
+    return res.json();
+  }
+  await new Promise((r) => setTimeout(r, 600)); // short pause so the loading state is visible
+  return analyzeLocal(text);
+};
+
+/* ------------------------------ UI pieces ------------------------------ */
+
 const Level = ({ lv }) => (
-  <span className={`rounded border px-1.5 py-0.5 text-xs font-medium ${LEVEL[lv]}`}>{lv}</span>
+  <span className={`border border-neutral-950 px-1.5 text-xs font-bold ${lv === "C2" ? "bg-neutral-950 text-stone-100" : lv === "C1" ? "bg-yellow-300" : ""}`}>
+    {lv}
+  </span>
 );
 
-const Panel = ({ icon: Icon, title, sub, right, children }) => (
-  <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-    <div className="mb-4 flex items-start justify-between gap-3">
-      <div className="flex items-center gap-3">
-        <div className="rounded-lg bg-slate-800 p-2 text-amber-300"><Icon size={16} /></div>
-        <div>
-          <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
-          <p className="text-xs text-slate-500">{sub}</p>
+const linkBtn =
+  "text-sm font-bold underline underline-offset-4 hover:bg-yellow-300 disabled:cursor-default disabled:text-neutral-500 disabled:no-underline disabled:hover:bg-transparent";
+
+const Section = ({ no, title, note, right, children }) => (
+  <section className="border-t-2 border-neutral-950 pb-16 pt-5">
+    <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <div className="flex items-baseline gap-4">
+          <span className="text-sm font-bold tabular-nums">{no}</span>
+          <h2 className="text-3xl font-black tracking-tight sm:text-4xl">{title}</h2>
         </div>
+        {note && <p className="mt-2 max-w-xl text-sm text-neutral-600">{note}</p>}
       </div>
       {right}
     </div>
@@ -108,85 +179,65 @@ const Panel = ({ icon: Icon, title, sub, right, children }) => (
   </section>
 );
 
+const Empty = ({ children }) => (
+  <p className="border border-dashed border-neutral-500 p-5 text-sm text-neutral-600">{children}</p>
+);
+
 const SaveBtn = ({ saved, onClick }) => (
-  <button
-    onClick={onClick}
-    disabled={saved}
-    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${
-      saved ? "text-amber-300" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
-    }`}
-  >
-    {saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
-    {saved ? "単語帳に保存済み" : "単語帳に保存"}
+  <button onClick={onClick} disabled={saved} className={linkBtn}>
+    {saved ? "単語帳に保存済み ✓" : "単語帳に保存 +"}
   </button>
 );
 
-function CollocationCard({ c, recall, saved, onSave }) {
+function CollocationRow({ c, recall, saved, onSave }) {
   const [open, setOpen] = useState(false);
   const show = !recall || open;
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
-          <div className="mb-1 text-xs font-medium text-rose-300">❌ 不自然</div>
-          <p className="font-serif text-base text-rose-100 line-through decoration-rose-400/60">{c.bad}</p>
-        </div>
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-          <div className="mb-1 text-xs font-medium text-emerald-300">⭕️ 自然</div>
-          {show ? (
-            <p className="font-serif text-base text-emerald-100">{c.good}</p>
-          ) : (
-            <button onClick={() => setOpen(true)} className="flex items-center gap-1.5 text-sm text-emerald-300 hover:text-emerald-100">
-              <Eye size={14} /> 先に自分で言い換えて、答えを見る
-            </button>
-          )}
-        </div>
+    <li className="grid gap-x-8 gap-y-3 border-b border-neutral-950 py-6 first:pt-0 md:grid-cols-2">
+      <div>
+        <p className="mb-1 text-xs font-bold text-red-600">❌ Textbook</p>
+        <p className="text-2xl font-semibold leading-snug text-neutral-500 line-through decoration-red-600 decoration-2">{c.bad}</p>
       </div>
-      {show && <p className="mt-3 text-xs leading-relaxed text-slate-400">{c.why}</p>}
-      <div className="mt-2 flex justify-end">
-        <SaveBtn saved={saved} onClick={() => onSave({ type: "collocation", en: c.good, note: `← ${c.bad}` })} />
+      <div>
+        <p className="mb-1 text-xs font-bold text-emerald-700">⭕️ Native</p>
+        {show ? (
+          <p className="text-2xl font-black leading-snug underline decoration-emerald-600 decoration-4 underline-offset-4">{c.good}</p>
+        ) : (
+          <button onClick={() => setOpen(true)} className={linkBtn}>先に自分で言い換えて、答えを見る →</button>
+        )}
       </div>
-    </div>
+      {show && <p className="max-w-2xl text-sm leading-relaxed text-neutral-700 md:col-span-2">{c.why}</p>}
+      <div className="md:col-span-2"><SaveBtn saved={saved} onClick={() => onSave({ type: "collocation", en: c.good, note: `← ${c.bad}` })} /></div>
+    </li>
   );
 }
 
-function VocabCard({ v, recall, saved, onSave }) {
+function VocabCell({ v, recall, saved, onSave }) {
   const [open, setOpen] = useState(false);
   const show = !recall || open;
   return (
-    <div className="flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center gap-2 text-sm text-slate-500">
-        <Level lv={v.fromLv} /> <span className="font-serif">{v.from}</span>
+    <li className="flex flex-col p-5">
+      <div className="flex items-center gap-2 text-sm text-neutral-600">
+        <Level lv={v.fromLv} /> <span className="line-through">{v.from}</span>
       </div>
-      <ArrowRight size={14} className="my-2 text-slate-600" />
       {show ? (
         <>
-          <div className="flex items-center gap-2">
-            <Level lv={v.toLv} />
-            <span className="font-serif text-xl text-slate-50">{v.to}</span>
-          </div>
-          <p className="mt-3 font-serif text-sm italic leading-relaxed text-slate-300">{v.ex}</p>
-          <p className="mt-2 text-xs leading-relaxed text-slate-500">{v.note}</p>
+          <div className="mt-5"><Level lv={v.toLv} /></div>
+          <p className="mt-2 text-3xl font-black leading-none tracking-tight">{v.to}</p>
+          <p className="mt-4 text-sm font-medium leading-relaxed">{v.ex}</p>
+          <p className="mt-2 text-xs leading-relaxed text-neutral-600">{v.note}</p>
         </>
       ) : (
-        <button onClick={() => setOpen(true)} className="flex items-center gap-1.5 text-left text-sm text-amber-300 hover:text-amber-200">
-          <Eye size={14} /> 1語で言い換えてみて、答えを見る
-        </button>
+        <button onClick={() => setOpen(true)} className={`${linkBtn} mt-5 text-left`}>1語で言い換えて、答えを見る →</button>
       )}
-      <div className="mt-auto flex justify-end pt-2">
-        <SaveBtn saved={saved} onClick={() => onSave({ type: "vocab", en: v.to, note: `← ${v.from}` })} />
-      </div>
-    </div>
+      <div className="mt-auto pt-5"><SaveBtn saved={saved} onClick={() => onSave({ type: "vocab", en: v.to, note: `← ${v.from}` })} /></div>
+    </li>
   );
 }
 
 const renderLine = (s) =>
   s.split(/(\{\{.*?\}\})/).filter(Boolean).map((p, i) =>
-    p.startsWith("{{") ? (
-      <mark key={i} className="rounded bg-amber-300/15 px-1 text-amber-200">{p.slice(2, -2)}</mark>
-    ) : (
-      <span key={i}>{p}</span>
-    )
+    p.startsWith("{{") ? <mark key={i} className="bg-yellow-300 px-1 text-neutral-950">{p.slice(2, -2)}</mark> : <span key={i}>{p}</span>
   );
 
 // Playback is a UI mock: a timer walks through the lines. Swap in Web Speech API / TTS here.
@@ -207,46 +258,35 @@ function ShadowingScript({ lines }) {
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
+      <div className="mb-6 flex items-center gap-5">
         <button
           onClick={toggle}
           aria-label={playing ? "一時停止" : "再生"}
-          className="rounded-full bg-amber-300 p-2.5 text-slate-950 transition hover:bg-amber-200"
+          className="flex h-12 w-12 shrink-0 items-center justify-center bg-neutral-950 text-stone-100 transition hover:bg-yellow-300 hover:text-neutral-950"
         >
-          {playing ? <Pause size={16} /> : <Play size={16} />}
+          {playing ? <Pause size={18} /> : <Play size={18} />}
         </button>
-        <div className="h-1.5 min-w-24 flex-1 overflow-hidden rounded-full bg-slate-800">
-          <div className="h-full rounded-full bg-amber-300 transition-all duration-500" style={{ width: `${progress}%` }} />
-        </div>
-        <div className="flex gap-1">
+        <div className="h-1 flex-1 bg-neutral-300"><div className="h-full bg-neutral-950 transition-all duration-500" style={{ width: `${progress}%` }} /></div>
+        <div className="flex gap-3">
           {[0.75, 1, 1.25].map((s) => (
-            <button
-              key={s}
-              onClick={() => setSpeed(s)}
-              className={`rounded-md px-2 py-1 text-xs ${speed === s ? "bg-slate-700 text-slate-50" : "text-slate-500 hover:text-slate-200"}`}
-            >
-              {s}x
-            </button>
+            <button key={s} onClick={() => setSpeed(s)} className={`text-sm font-bold ${speed === s ? "underline underline-offset-4" : "text-neutral-500 hover:text-neutral-950"}`}>{s}x</button>
           ))}
         </div>
       </div>
-      <div className="space-y-1">
+      <ul>
         {lines.map((l, i) => (
-          <button
-            key={i}
-            onClick={() => { setCur(i); setPlaying(true); }}
-            className={`group flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition ${
-              cur === i ? "bg-slate-800" : "hover:bg-slate-800/50"
-            }`}
-          >
-            <Volume2 size={14} className={`mt-2 shrink-0 ${cur === i ? "text-amber-300" : "text-slate-600 group-hover:text-slate-400"}`} />
-            <span className={`font-serif text-lg leading-relaxed ${cur === i ? "text-slate-50" : "text-slate-300"}`}>{renderLine(l)}</span>
-          </button>
+          <li key={i}>
+            <button
+              onClick={() => { setCur(i); setPlaying(true); }}
+              className={`block w-full px-3 py-2 text-left text-2xl font-bold leading-tight tracking-tight sm:text-3xl ${cur === i ? "bg-neutral-950 text-stone-100" : "hover:bg-stone-200"}`}
+            >
+              {renderLine(l)}
+            </button>
+          </li>
         ))}
-      </div>
-      <p className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-        <mark className="rounded bg-amber-300/15 px-1 text-amber-200">黄色</mark>
-        はつなぎ言葉。文の頭や間で、考える時間を稼ぐための表現です。
+      </ul>
+      <p className="mt-5 text-xs text-neutral-600">
+        <mark className="bg-yellow-300 px-1 text-neutral-950">黄色</mark> はつなぎ言葉。考える時間を稼ぐための表現です。行をクリックするとその行から再生します。
       </p>
     </div>
   );
@@ -262,90 +302,73 @@ function Insights({ bank, setBank }) {
   const maxWeek = Math.max(...WEEK.map((w) => w[1]));
 
   return (
-    <div className="grid gap-5 lg:grid-cols-5">
-      <div className="space-y-5 lg:col-span-2">
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            ["保存した表現", bank.length, BookMarked],
-            ["定着済み", mastered, Target],
-            ["連続学習日数", 6, Flame],
-          ].map(([label, n, Icon]) => (
-            <div key={label} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-              <Icon size={16} className="text-amber-300" />
-              <div className="mt-3 font-serif text-3xl text-slate-50">{n}</div>
-              <div className="text-xs text-slate-500">{label}</div>
-            </div>
-          ))}
-        </div>
-
-        <Panel icon={BarChart3} title="弱点分析" sub="直近の添削で指摘が多かった項目">
-          <div className="space-y-4">
-            {WEAKNESS.map((w) => (
-              <div key={w.label}>
-                <div className="mb-1.5 flex justify-between text-xs">
-                  <span className="text-slate-300">{w.label}</span>
-                  <span className="text-slate-500">{w.pct}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                  <div className="h-full rounded-full bg-rose-400" style={{ width: `${w.pct}%` }} />
-                </div>
-              </div>
-            ))}
+    <div>
+      <div className="grid divide-y divide-neutral-950 border-y-2 border-neutral-950 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        {[["保存した表現", bank.length], ["定着済み", mastered], ["連続学習日数", 6]].map(([label, n]) => (
+          <div key={label} className="p-6">
+            <div className="text-7xl font-black leading-none tracking-tighter tabular-nums">{n}</div>
+            <div className="mt-3 text-sm text-neutral-600">{label}</div>
           </div>
-          <div className="mt-6 border-t border-slate-800 pt-4">
-            <p className="mb-3 text-xs text-slate-500">今週の練習回数</p>
-            <div className="flex h-24 items-end gap-2">
-              {WEEK.map(([d, n]) => (
-                <div key={d} className="flex flex-1 flex-col items-center gap-1.5">
-                  <div className="flex h-16 w-full items-end">
-                    <div className="w-full rounded-t bg-amber-300" style={{ height: `${(n / maxWeek) * 100}%`, minHeight: n ? 4 : 0 }} />
-                  </div>
-                  <span className="text-xs text-slate-500">{d}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Panel>
+        ))}
       </div>
 
-      <div className="lg:col-span-3">
-        <Panel
-          icon={BookMarked}
-          title="マイ単語帳"
-          sub="行をクリックすると定着度が変わります"
-          right={
-            <div className="flex gap-1">
-              {[["all", "すべて"], ["collocation", "コロケーション"], ["vocab", "語彙"]].map(([k, l]) => (
-                <button
-                  key={k}
-                  onClick={() => setFilter(k)}
-                  className={`rounded-md px-2.5 py-1 text-xs ${filter === k ? "bg-slate-700 text-slate-50" : "text-slate-500 hover:text-slate-200"}`}
-                >
-                  {l}
-                </button>
+      <div className="mt-12 grid gap-x-12 lg:grid-cols-5">
+        <div className="lg:col-span-2">
+          <Section no="01" title="弱点分析" note="直近の添削で指摘が多かった項目">
+            <div className="space-y-5">
+              {WEAKNESS.map((w) => (
+                <div key={w.label}>
+                  <div className="mb-1 flex items-baseline justify-between">
+                    <span className="text-sm font-bold">{w.label}</span>
+                    <span className="text-2xl font-black tabular-nums">{w.pct}%</span>
+                  </div>
+                  <div className="h-3 bg-neutral-300"><div className="h-full bg-neutral-950" style={{ width: `${w.pct}%` }} /></div>
+                </div>
               ))}
             </div>
-          }
-        >
-          <ul className="divide-y divide-slate-800">
-            {items.map((b) => (
-              <li key={b.id}>
-                <button onClick={() => cycle(b.id)} className="flex w-full items-center justify-between gap-4 py-3 text-left hover:bg-slate-800/40">
-                  <div>
-                    <div className="font-serif text-lg text-slate-100">{b.en}</div>
-                    <div className="text-xs text-slate-500">{b.note}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1.5" title="定着度">
-                    {[0, 1, 2].map((i) => (
-                      <span key={i} className={`h-2.5 w-2.5 rounded-full ${i < b.mastery ? "bg-emerald-400" : "bg-slate-700"}`} />
-                    ))}
-                  </div>
-                </button>
-              </li>
-            ))}
-            {items.length === 0 && <li className="py-8 text-center text-sm text-slate-500">まだありません。添削結果から保存してみましょう。</li>}
-          </ul>
-        </Panel>
+            <p className="mb-3 mt-10 text-sm font-bold">今週の練習回数</p>
+            <div className="flex h-28 items-end gap-2 border-b border-neutral-950">
+              {WEEK.map(([d, n]) => (
+                <div key={d} className="flex flex-1 flex-col items-center justify-end gap-1">
+                  <div className="w-full bg-neutral-950" style={{ height: `${(n / maxWeek) * 80}px`, minHeight: n ? 4 : 2 }} />
+                </div>
+              ))}
+            </div>
+            <div className="mt-1 flex gap-2">{WEEK.map(([d]) => <span key={d} className="flex-1 text-center text-xs text-neutral-600">{d}</span>)}</div>
+          </Section>
+        </div>
+
+        <div className="lg:col-span-3">
+          <Section
+            no="02"
+            title="マイ単語帳"
+            note="行をクリックすると定着度が変わります"
+            right={
+              <div className="flex gap-4">
+                {[["all", "すべて"], ["collocation", "コロケーション"], ["vocab", "語彙"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setFilter(k)} className={`text-sm font-bold ${filter === k ? "underline underline-offset-4" : "text-neutral-500 hover:text-neutral-950"}`}>{l}</button>
+                ))}
+              </div>
+            }
+          >
+            <ul className="border-t border-neutral-950">
+              {items.map((b) => (
+                <li key={b.id} className="border-b border-neutral-950">
+                  <button onClick={() => cycle(b.id)} className="flex w-full items-center justify-between gap-4 py-4 text-left hover:bg-stone-200">
+                    <div>
+                      <div className="text-2xl font-bold tracking-tight">{b.en}</div>
+                      <div className="text-xs text-neutral-600">{b.note}</div>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5" title="定着度">
+                      {[0, 1, 2].map((i) => <span key={i} className={`h-3 w-3 border border-neutral-950 ${i < b.mastery ? "bg-neutral-950" : ""}`} />)}
+                    </div>
+                  </button>
+                </li>
+              ))}
+              {items.length === 0 && <li className="py-8 text-sm text-neutral-600">まだありません。添削結果から保存してみましょう。</li>}
+            </ul>
+          </Section>
+        </div>
       </div>
     </div>
   );
@@ -353,15 +376,31 @@ function Insights({ bank, setBank }) {
 
 /* ------------------------------ App ------------------------------ */
 
+const useClock = () => {
+  const fmt = () => new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo" });
+  const [t, setT] = useState(fmt);
+  useEffect(() => { const id = setInterval(() => setT(fmt()), 30000); return () => clearInterval(id); }, []);
+  return t;
+};
+
+const GUIDE = [
+  ["書く", "英文をそのまま打つ。サンプルが入っています。"],
+  ["分析する", "「添削・分析を実行」を押す。"],
+  ["言い直す", "Active Recall をオンにして、答えを見る前に自分で考える。"],
+  ["声に出す", "Shadowing Script を真似て、音読する。"],
+];
+
 export default function FluentCoach() {
   const [tab, setTab] = useState("workspace");
   const [text, setText] = useState(SAMPLE);
   const [promptIdx, setPromptIdx] = useState(0);
   const [status, setStatus] = useState("done"); // "idle" | "loading" | "done"
-  const [result, setResult] = useState(MOCK_RESULT);
+  const [result, setResult] = useState(() => analyzeLocal(SAMPLE));
+  const [error, setError] = useState("");
   const [recall, setRecall] = useState(false);
   const [bank, setBank] = useState(INITIAL_BANK);
   const [showGuide, setShowGuide] = useState(true);
+  const time = useClock();
 
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   const isSaved = (en) => bank.some((b) => b.en === en);
@@ -371,155 +410,164 @@ export default function FluentCoach() {
   const run = async () => {
     if (!words || status === "loading") return;
     setStatus("loading");
-    setResult(await analyzeText(text));
+    setError("");
+    try {
+      setResult(await analyzeText(text));
+    } catch (e) {
+      setError("分析に失敗しました。API_ENDPOINT の設定とネットワークを確認してください。");
+    }
     setStatus("done");
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 font-sans text-slate-200">
-      <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <div className="rounded-lg bg-amber-300 p-1.5 text-slate-950"><Sparkles size={16} /></div>
-            <span className="font-serif text-lg text-slate-50">Fluent Coach</span>
-          </div>
-          <nav className="flex gap-1">
-            {[["workspace", "Workspace", PenLine], ["insights", "Insights", BarChart3]].map(([k, l, Icon]) => (
-              <button
-                key={k}
-                onClick={() => setTab(k)}
-                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${
-                  tab === k ? "bg-slate-800 text-slate-50" : "text-slate-500 hover:text-slate-200"
-                }`}
-              >
-                <Icon size={15} /> {l}
-                {k === "insights" && <span className="rounded-full bg-slate-700 px-1.5 text-xs text-slate-300">{bank.length}</span>}
-              </button>
+    <div className="min-h-screen bg-stone-100 font-sans text-neutral-950">
+      <header className="border-b border-neutral-950">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-8 gap-y-2 px-5 py-4">
+          <span className="text-xl font-black tracking-tight">Fluent Coach</span>
+          <p className="hidden text-xs leading-snug text-neutral-600 md:block">
+            based in your browser<br />working without an API key ({time} JST)
+          </p>
+          <p className="flex items-center gap-2 text-xs font-bold"><span className="h-2 w-2 bg-emerald-600" />Available</p>
+          <nav className="flex gap-6 text-sm font-bold">
+            {[["workspace", "Workspace"], ["insights", `Insights (${bank.length})`]].map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} className={`underline-offset-8 ${tab === k ? "underline decoration-2" : "text-neutral-500 hover:text-neutral-950"}`}>{l}</button>
             ))}
           </nav>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="mx-auto max-w-6xl px-5">
+        <div className="pb-12 pt-14 sm:pt-20">
+          <h1 className="text-5xl font-black leading-none tracking-tighter sm:text-7xl md:text-8xl">
+            {tab === "insights" ? "Look back. Remember." : "Write. Fix. Say it."}
+          </h1>
+          <p className="mt-6 max-w-xl text-lg leading-relaxed">
+            {tab === "insights"
+              ? "指摘された表現と弱点を、定着するまで見返すためのノートです。"
+              : "教科書の英語を、ネイティブが実際に口にする英語へ。書いて、直して、声に出すためのコーチです。"}
+          </p>
+        </div>
+
         {tab === "insights" ? (
           <Insights bank={bank} setBank={setBank} />
         ) : (
           <>
             {showGuide && (
-              <div className="mb-5 flex items-start justify-between gap-4 rounded-2xl border border-amber-300/30 bg-amber-300/5 p-4">
-                <div>
-                  <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-200">
-                    <Lightbulb size={15} /> はじめての使い方
-                  </p>
-                  <ol className="list-inside list-decimal space-y-1 text-sm text-slate-300">
-                    <li>左のエディタに英文を書く（サンプルを入れてあります）</li>
-                    <li>「添削・分析を実行」を押す</li>
-                    <li>Active Recall をオンにして、答えを見る前に自分で言い直す</li>
-                    <li>Shadowing Script を声に出して真似る</li>
-                  </ol>
-                  <p className="mt-2 text-xs text-slate-500">これはモックアップです。分析結果は固定のダミーデータです。</p>
+              <div className="mb-14">
+                <div className="mb-2 flex justify-end">
+                  <button onClick={() => setShowGuide(false)} className={linkBtn}>ガイドを閉じる ×</button>
                 </div>
-                <button onClick={() => setShowGuide(false)} aria-label="閉じる" className="rounded-md p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200">
-                  <X size={16} />
-                </button>
+                <ol className="grid gap-px border border-neutral-950 bg-neutral-950 sm:grid-cols-4">
+                  {GUIDE.map(([t, d], i) => (
+                    <li key={t} className="bg-stone-100 p-4">
+                      <span className="text-sm font-bold tabular-nums">0{i + 1}</span>
+                      <p className="mt-2 text-lg font-black">{t}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-neutral-600">{d}</p>
+                    </li>
+                  ))}
+                </ol>
+                <p className="mt-2 text-xs text-neutral-600">簡易ルールで分析します。登録済みの表現パターンだけを検出し、見つからない場合は「該当なし」と表示します。</p>
               </div>
             )}
 
-            <div className="grid gap-5 lg:grid-cols-5">
-              {/* Output Workspace */}
-              <div className="lg:col-span-2">
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 lg:sticky lg:top-20">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-slate-500">今日のお題</p>
-                      <p className="mt-1 font-serif text-base leading-snug text-slate-100">{PROMPTS[promptIdx]}</p>
-                    </div>
-                    <button
-                      onClick={() => setPromptIdx((i) => (i + 1) % PROMPTS.length)}
-                      aria-label="お題を変える"
-                      className="rounded-md p-1.5 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
-                    >
-                      <Shuffle size={15} />
-                    </button>
+            <Section no="01" title="Output Workspace" note="日記、意見、スピーチ原稿など。話すつもりで書いてください。">
+              <div className="grid gap-x-10 gap-y-6 md:grid-cols-3">
+                <div>
+                  <p className="text-sm text-neutral-600">今日のお題</p>
+                  <p className="mt-2 text-2xl font-bold leading-snug tracking-tight">{PROMPTS[promptIdx]}</p>
+                  <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2">
+                    <button onClick={() => setPromptIdx((i) => (i + 1) % PROMPTS.length)} className={`${linkBtn} inline-flex items-center gap-1.5`}><Shuffle size={13} />別のお題</button>
+                    <button onClick={() => setText(SAMPLE)} className={`${linkBtn} inline-flex items-center gap-1.5`}><RotateCcw size={13} />サンプルに戻す</button>
                   </div>
+                </div>
+                <div className="md:col-span-2">
                   <textarea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     placeholder="Write the way you would say it out loud..."
-                    className="h-64 w-full resize-none rounded-xl border border-slate-800 bg-slate-950 p-4 font-serif text-base leading-relaxed text-slate-100 placeholder-slate-600 focus:border-amber-300/60 focus:outline-none"
+                    className="h-56 w-full resize-none border border-neutral-950 bg-white p-4 text-lg leading-relaxed placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-950"
                   />
-                  <div className="mt-3 flex items-center justify-between">
-                    <span className="text-xs text-slate-500">{words} words</span>
-                    <button onClick={() => setText(SAMPLE)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-200">
-                      <RotateCcw size={12} /> サンプルに戻す
-                    </button>
-                  </div>
+                  <p className="mt-2 text-xs tabular-nums text-neutral-600">{words} words</p>
                   <button
                     onClick={run}
                     disabled={!words || status === "loading"}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-amber-300 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="mt-4 flex w-full items-center justify-between bg-neutral-950 px-6 py-5 text-xl font-black text-stone-100 transition hover:bg-yellow-300 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-neutral-950 disabled:hover:text-stone-100"
                   >
-                    {status === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                    {status === "loading" ? "分析しています" : "添削・分析を実行"}
+                    <span>{status === "loading" ? "Analyzing…" : "添削・分析を実行"}</span>
+                    {status === "loading" ? <Loader2 size={22} className="animate-spin" /> : <span>→</span>}
                   </button>
+                  {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
                 </div>
               </div>
+            </Section>
 
-              {/* AI Coaching Result */}
-              <div className="space-y-5 lg:col-span-3">
-                {status === "loading" ? (
-                  <div className="space-y-5">
-                    {[0, 1, 2].map((i) => <div key={i} className="h-40 animate-pulse rounded-2xl border border-slate-800 bg-slate-900" />)}
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-                      <div className="min-w-48 flex-1">
-                        <div className="mb-2 flex items-baseline justify-between">
-                          <span className="text-sm text-slate-300">自然さスコア</span>
-                          <span className="font-serif text-xl text-slate-50">{result.score}<span className="text-sm text-slate-500"> / 100</span></span>
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                          <div className="h-full rounded-full bg-amber-300" style={{ width: `${result.score}%` }} />
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setRecall((r) => !r)}
-                        aria-pressed={recall}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${
-                          recall ? "border-amber-300/60 bg-amber-300/10 text-amber-200" : "border-slate-700 text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        <Eye size={15} /> Active Recall {recall ? "オン" : "オフ"}
-                      </button>
-                    </div>
-
-                    <Panel icon={Target} title="Collocation Audit" sub="文法は合っているが、ネイティブは言わない組み合わせ">
-                      <div className="space-y-3">
-                        {result.collocations.map((c) => (
-                          <CollocationCard key={c.id} c={c} recall={recall} saved={isSaved(c.good)} onSave={save} />
-                        ))}
-                      </div>
-                    </Panel>
-
-                    <Panel icon={Sparkles} title="Vocabulary Level-up" sub="B1〜B2の語を、C1〜C2の表現へ">
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        {result.vocab.map((v) => (
-                          <VocabCard key={v.id} v={v} recall={recall} saved={isSaved(v.to)} onSave={save} />
-                        ))}
-                      </div>
-                    </Panel>
-
-                    <Panel icon={Volume2} title="Shadowing Script" sub="あなたの伝えたかったことを、話し言葉に書き換えました">
-                      <ShadowingScript lines={result.script} />
-                    </Panel>
-                  </>
-                )}
+            {status === "loading" ? (
+              <div className="space-y-6 pb-16">
+                {[0, 1, 2].map((i) => <div key={i} className="h-40 animate-pulse bg-stone-200" />)}
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-end justify-between gap-6 border-t-2 border-neutral-950 py-8">
+                  <div className="flex items-end gap-3">
+                    <span className="text-8xl font-black leading-none tracking-tighter tabular-nums">{result.score}</span>
+                    <span className="pb-2 text-sm text-neutral-600">/ 100<br />自然さスコア</span>
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => setRecall((r) => !r)}
+                      aria-pressed={recall}
+                      className={`border border-neutral-950 px-4 py-3 text-sm font-bold transition ${recall ? "bg-neutral-950 text-stone-100" : "hover:bg-yellow-300"}`}
+                    >
+                      <Eye size={14} className="mr-2 inline" />Active Recall: {recall ? "ON" : "OFF"}
+                    </button>
+                    <p className="mt-2 max-w-xs text-xs text-neutral-600">オンにすると答えを隠します。先に自分で言い直してから確認できます。</p>
+                  </div>
+                </div>
+
+                <Section no="02" title="Collocation Audit" note="文法は合っているが、ネイティブは言わない組み合わせ">
+                  {result.collocations.length ? (
+                    <ul className="border-t border-neutral-950 pt-6">
+                      {result.collocations.map((c) => (
+                        <CollocationRow key={c.id} c={c} recall={recall} saved={isSaved(c.good)} onSave={save} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <Empty>不自然な組み合わせは見つかりませんでした。</Empty>
+                  )}
+                </Section>
+
+                <Section no="03" title="Vocabulary Level-up" note="B1〜B2の語を、C1〜C2の表現へ">
+                  {result.vocab.length ? (
+                    <ul className="grid divide-y divide-neutral-950 border-y border-neutral-950 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                      {result.vocab.map((v) => (
+                        <VocabCell key={v.id} v={v} recall={recall} saved={isSaved(v.to)} onSave={save} />
+                      ))}
+                    </ul>
+                  ) : (
+                    <Empty>置き換え候補は見つかりませんでした。「very + 形容詞」を使うと提案が出ます。</Empty>
+                  )}
+                </Section>
+
+                <Section no="04" title="Shadowing Script" note="あなたの伝えたかったことを、話し言葉に書き換えました。">
+                  {result.script.length ? (
+                    <ShadowingScript key={result.script.join("|")} lines={result.script} />
+                  ) : (
+                    <Empty>英文を入力して分析を実行すると、話し言葉の台本が作られます。</Empty>
+                  )}
+                </Section>
+              </>
+            )}
           </>
         )}
       </main>
+
+      <footer className="border-t-2 border-neutral-950 px-5 py-16 text-center">
+        <p className="text-4xl font-black leading-tight tracking-tighter sm:text-6xl">
+          WRITE IT.<br />FIX IT.<br />SAY IT OUT LOUD.
+        </p>
+        <p className="mt-8 text-xs text-neutral-600">UI mockup with a rule-based demo engine.</p>
+        <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className={`${linkBtn} mt-3`}>Back to the top ↑</button>
+      </footer>
     </div>
   );
 }
