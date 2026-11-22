@@ -5,12 +5,14 @@
  * (COLLOCATION_RULES / UPGRADES below) checks whatever you type. No API key needed.
  * Stack: React 18 + Tailwind CSS (core utilities only) + lucide-react
  * Design: editorial, square-cornered, hairline rules, heavy type on warm grey paper.
+ * Images: hotlinked from Pexels (free license). <Photo> falls back to a flat block if a URL fails.
+ * Motion: marquee, scroll reveal, parallax photos, count-up score (all respect reduced-motion).
  *
  * Where to plug in a real backend:
  *   -> set API_ENDPOINT to a backend that wraps an LLM. It receives POST { text }
  *      and must return the same shape as analyzeLocal().
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Play, Pause, Eye, Loader2, Shuffle, RotateCcw } from "lucide-react";
 
 /* ------------------------------ Dummy data ------------------------------ */
@@ -152,6 +154,142 @@ const analyzeText = async (text) => {
   return analyzeLocal(text);
 };
 
+/* ------------------------------ Motion & media ------------------------------ */
+
+const CSS = `
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.marquee-track { display: flex; width: max-content; animation: marquee 38s linear infinite; }
+.marquee:hover .marquee-track { animation-play-state: paused; }
+.reveal { opacity: 0; transform: translateY(36px); transition: opacity .8s ease, transform .9s cubic-bezier(.2,.7,.2,1); }
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track { animation: none; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+}`;
+
+// Free-to-use photos from Pexels (https://www.pexels.com/license/). Hotlinked; swap for local files if you prefer.
+const px = (id, name) => `https://images.pexels.com/photos/${id}/${name}.jpeg?auto=compress&cs=tinysrgb&w=1400`;
+const PHOTOS = {
+  ridge: px(2114206, "pexels-photo-2114206"),
+  write: px(3201466, "pexels-photo-3201466"),
+  hand: px(210661, "pexels-photo-210661"),
+  summit: px(3589228, "pexels-photo-3589228"),
+  pencil: px(159865, "notepad-pencil-green-black-159865"),
+};
+
+const MARQUEE = ["make a point of", "lucked out", "wiped out", "over the moon", "itching to go", "pick up the tab", "a blessing in disguise", "meticulous", "breathtaking", "you know?"];
+
+const Wrap = ({ children }) => <div className="mx-auto max-w-6xl px-5">{children}</div>;
+
+// Fades a block up the first time it scrolls into view.
+function Reveal({ children }) {
+  const ref = useRef(null);
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") { setOn(true); return; }
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setOn(true); io.disconnect(); } }, { threshold: 0.1 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return <div ref={ref} className={`reveal ${on ? "in" : ""}`}>{children}</div>;
+}
+
+// Photo frame: grayscale until hovered, slow zoom on hover, optional scroll parallax (depth),
+// and a flat fallback block if the image URL fails. Pass "relative" or "absolute" in className.
+function Photo({ src, alt, className = "", depth = 0 }) {
+  const box = useRef(null);
+  const [dy, setDy] = useState(0);
+  const [ok, setOk] = useState(true);
+  useEffect(() => {
+    if (!depth) return;
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const r = box.current && box.current.getBoundingClientRect();
+        if (!r) return;
+        const limit = r.height * 0.15;
+        const v = (r.top + r.height / 2 - window.innerHeight / 2) * -depth;
+        setDy(Math.max(-limit, Math.min(limit, v)));
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    return () => { window.removeEventListener("scroll", update); cancelAnimationFrame(raf); };
+  }, [depth]);
+  return (
+    <div ref={box} className={`group overflow-hidden bg-neutral-300 ${className}`}>
+      {ok && (
+        <div className="absolute inset-0 grayscale transition duration-700 group-hover:scale-110 group-hover:grayscale-0">
+          <img
+            src={src}
+            alt={alt}
+            loading="lazy"
+            onError={() => setOk(false)}
+            className="absolute left-0 w-full object-cover"
+            style={{ height: depth ? "130%" : "100%", top: depth ? "-15%" : 0, transform: `translateY(${dy}px)` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Marquee({ items, dark = false, reverse = false }) {
+  return (
+    <div aria-hidden="true" className={`marquee overflow-hidden border-y-2 border-neutral-950 py-3 ${dark ? "bg-neutral-950 text-stone-100" : "bg-yellow-300"}`}>
+      <div className="marquee-track" style={reverse ? { animationDirection: "reverse" } : undefined}>
+        {[...items, ...items].map((t, i) => (
+          <span key={i} className="whitespace-nowrap px-6 text-3xl font-black tracking-tight">{t}<span className="pl-12">+</span></span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Thin reading-progress bar. Updates the DOM directly so scrolling does not re-render the app.
+function ScrollBar() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const on = () => {
+      const h = document.documentElement.scrollHeight - window.innerHeight;
+      if (ref.current) ref.current.style.width = `${h > 0 ? (window.scrollY / h) * 100 : 0}%`;
+    };
+    on();
+    window.addEventListener("scroll", on, { passive: true });
+    window.addEventListener("resize", on);
+    return () => { window.removeEventListener("scroll", on); window.removeEventListener("resize", on); };
+  }, []);
+  return <div ref={ref} className="fixed left-0 top-0 z-20 h-1 bg-neutral-950" style={{ width: 0 }} />;
+}
+
+const useCountUp = (to) => {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    let raf, t0;
+    const step = (t) => {
+      t0 = t0 === undefined ? t : t0;
+      const p = Math.min(1, (t - t0) / 1000);
+      setV(Math.round(to * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [to]);
+  return v;
+};
+
+// Each letter lifts when hovered.
+const Letters = ({ text }) =>
+  text.split("").map((ch, i) =>
+    ch === " " ? (
+      <span key={i} className="inline-block w-5 sm:w-8" />
+    ) : (
+      <span key={i} className="inline-block cursor-default transition-transform duration-200 ease-out hover:-translate-y-3 hover:bg-yellow-300">{ch}</span>
+    )
+  );
+
 /* ------------------------------ UI pieces ------------------------------ */
 
 const Level = ({ lv }) => (
@@ -163,8 +301,9 @@ const Level = ({ lv }) => (
 const linkBtn =
   "text-sm font-bold underline underline-offset-4 hover:bg-yellow-300 disabled:cursor-default disabled:text-neutral-500 disabled:no-underline disabled:hover:bg-transparent";
 
-const Section = ({ no, title, note, right, children }) => (
-  <section className="border-t-2 border-neutral-950 pb-16 pt-5">
+const Section = ({ id, no, title, note, right, children }) => (
+  <section id={id} className="border-t-2 border-neutral-950 pb-16 pt-5">
+    <Reveal>
     <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
       <div>
         <div className="flex items-baseline gap-4">
@@ -176,6 +315,7 @@ const Section = ({ no, title, note, right, children }) => (
       {right}
     </div>
     {children}
+    </Reveal>
   </section>
 );
 
@@ -401,11 +541,14 @@ export default function FluentCoach() {
   const [bank, setBank] = useState(INITIAL_BANK);
   const [showGuide, setShowGuide] = useState(true);
   const time = useClock();
+  const shown = useCountUp(result.score);
 
+  const ready = status !== "loading";
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   const isSaved = (en) => bank.some((b) => b.en === en);
   const save = (item) =>
     setBank((b) => (b.some((x) => x.en === item.en) ? b : [{ id: `${Date.now()}-${item.en}`, mastery: 0, ...item }, ...b]));
+  const goto = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
 
   const run = async () => {
     if (!words || status === "loading") return;
@@ -419,9 +562,14 @@ export default function FluentCoach() {
     setStatus("done");
   };
 
+  const heroLines = tab === "insights" ? ["Look back.", "Remember."] : ["Write.", "Fix.", "Say it."];
+
   return (
-    <div className="min-h-screen bg-stone-100 font-sans text-neutral-950">
-      <header className="border-b border-neutral-950">
+    <div className="min-h-screen overflow-x-hidden bg-stone-100 font-sans text-neutral-950">
+      <style>{CSS}</style>
+      <ScrollBar />
+
+      <header className="sticky top-0 z-10 border-b border-neutral-950 bg-stone-100">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-8 gap-y-2 px-5 py-4">
           <span className="text-xl font-black tracking-tight">Fluent Coach</span>
           <p className="hidden text-xs leading-snug text-neutral-600 md:block">
@@ -436,137 +584,176 @@ export default function FluentCoach() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-5">
-        <div className="pb-12 pt-14 sm:pt-20">
-          <h1 className="text-5xl font-black leading-none tracking-tighter sm:text-7xl md:text-8xl">
-            {tab === "insights" ? "Look back. Remember." : "Write. Fix. Say it."}
-          </h1>
-          <p className="mt-6 max-w-xl text-lg leading-relaxed">
-            {tab === "insights"
-              ? "指摘された表現と弱点を、定着するまで見返すためのノートです。"
-              : "教科書の英語を、ネイティブが実際に口にする英語へ。書いて、直して、声に出すためのコーチです。"}
-          </p>
+      <Wrap>
+        <div className="grid items-start gap-10 pb-16 pt-12 md:grid-cols-12 md:pt-16">
+          <div className="md:col-span-7">
+            <h1 className="text-7xl font-black leading-none tracking-tighter sm:text-8xl lg:text-9xl">
+              {heroLines.map((l) => <div key={l}><Letters text={l} /></div>)}
+            </h1>
+            <p className="mt-8 max-w-md text-lg leading-relaxed">
+              {tab === "insights"
+                ? "指摘された表現と弱点を、定着するまで見返すためのノートです。"
+                : "教科書の英語を、ネイティブが実際に口にする英語へ。書いて、直して、声に出すためのコーチです。"}
+            </p>
+            {tab === "workspace" && <button onClick={() => goto("workspace")} className={`${linkBtn} mt-6 text-base`}>書き始める ↓</button>}
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:col-span-5">
+            <Photo src={PHOTOS.ridge} alt="Hikers walking along a mountain ridge" className="relative h-96" depth={0.06} />
+            <Photo src={PHOTOS.write} alt="A hand writing in a spiral notebook" className="relative mt-12 h-80" depth={-0.06} />
+          </div>
         </div>
+      </Wrap>
 
+      <Marquee items={MARQUEE} />
+
+      <main>
         {tab === "insights" ? (
-          <Insights bank={bank} setBank={setBank} />
+          <Wrap><div className="pt-16"><Insights bank={bank} setBank={setBank} /></div></Wrap>
         ) : (
           <>
-            {showGuide && (
-              <div className="mb-14">
-                <div className="mb-2 flex justify-end">
-                  <button onClick={() => setShowGuide(false)} className={linkBtn}>ガイドを閉じる ×</button>
+            <Wrap>
+              <div className="pt-16">
+                {showGuide && (
+                  <div className="mb-14">
+                    <div className="mb-2 flex justify-end">
+                      <button onClick={() => setShowGuide(false)} className={linkBtn}>ガイドを閉じる ×</button>
+                    </div>
+                    <ol className="grid gap-px border border-neutral-950 bg-neutral-950 sm:grid-cols-4">
+                      {GUIDE.map(([t, d], i) => (
+                        <li key={t} className="bg-stone-100 p-4">
+                          <span className="text-sm font-bold tabular-nums">0{i + 1}</span>
+                          <p className="mt-2 text-lg font-black">{t}</p>
+                          <p className="mt-1 text-xs leading-relaxed text-neutral-600">{d}</p>
+                        </li>
+                      ))}
+                    </ol>
+                    <p className="mt-2 text-xs text-neutral-600">簡易ルールで分析します。登録済みの表現パターンだけを検出し、見つからない場合は「該当なし」と表示します。</p>
+                  </div>
+                )}
+
+                <Section id="workspace" no="01" title="Output Workspace" note="日記、意見、スピーチ原稿など。話すつもりで書いてください。">
+                  <div className="grid gap-x-10 gap-y-6 md:grid-cols-3">
+                    <div>
+                      <p className="text-sm text-neutral-600">今日のお題</p>
+                      <p className="mt-2 text-2xl font-bold leading-snug tracking-tight">{PROMPTS[promptIdx]}</p>
+                      <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2">
+                        <button onClick={() => setPromptIdx((i) => (i + 1) % PROMPTS.length)} className={`${linkBtn} inline-flex items-center gap-1.5`}><Shuffle size={13} />別のお題</button>
+                        <button onClick={() => setText(SAMPLE)} className={`${linkBtn} inline-flex items-center gap-1.5`}><RotateCcw size={13} />サンプルに戻す</button>
+                      </div>
+                      <Photo src={PHOTOS.hand} alt="A hand writing with a blue pen" className="relative mt-8 hidden h-56 md:block" depth={0.05} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <textarea
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        placeholder="Write the way you would say it out loud..."
+                        className="h-64 w-full resize-none border border-neutral-950 bg-white p-4 text-lg leading-relaxed placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-950"
+                      />
+                      <p className="mt-2 text-xs tabular-nums text-neutral-600">{words} words</p>
+                      <button
+                        onClick={run}
+                        disabled={!words || !ready}
+                        className="mt-4 flex w-full items-center justify-between bg-neutral-950 px-6 py-5 text-xl font-black text-stone-100 transition hover:bg-yellow-300 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-neutral-950 disabled:hover:text-stone-100"
+                      >
+                        <span>{ready ? "添削・分析を実行" : "Analyzing…"}</span>
+                        {ready ? <span>→</span> : <Loader2 size={22} className="animate-spin" />}
+                      </button>
+                      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+                    </div>
+                  </div>
+                </Section>
+
+                {ready ? (
+                  <>
+                    <div className="flex flex-wrap items-end justify-between gap-6 border-t-2 border-neutral-950 py-8">
+                      <div>
+                        <div className="flex items-end gap-3">
+                          <span className="text-8xl font-black leading-none tracking-tighter tabular-nums">{shown}</span>
+                          <span className="pb-2 text-sm text-neutral-600">/ 100<br />自然さスコア</span>
+                        </div>
+                        <div className="mt-4 h-2 w-64 bg-neutral-300"><div className="h-full bg-neutral-950" style={{ width: `${shown}%` }} /></div>
+                      </div>
+                      <div>
+                        <button
+                          onClick={() => setRecall((r) => !r)}
+                          aria-pressed={recall}
+                          className={`border border-neutral-950 px-4 py-3 text-sm font-bold transition ${recall ? "bg-neutral-950 text-stone-100" : "hover:bg-yellow-300"}`}
+                        >
+                          <Eye size={14} className="mr-2 inline" />Active Recall: {recall ? "ON" : "OFF"}
+                        </button>
+                        <p className="mt-2 max-w-xs text-xs text-neutral-600">オンにすると答えを隠します。先に自分で言い直してから確認できます。</p>
+                      </div>
+                    </div>
+
+                    <Section no="02" title="Collocation Audit" note="文法は合っているが、ネイティブは言わない組み合わせ">
+                      {result.collocations.length ? (
+                        <ul className="border-t border-neutral-950 pt-6">
+                          {result.collocations.map((c) => (
+                            <CollocationRow key={c.id} c={c} recall={recall} saved={isSaved(c.good)} onSave={save} />
+                          ))}
+                        </ul>
+                      ) : (
+                        <Empty>不自然な組み合わせは見つかりませんでした。</Empty>
+                      )}
+                    </Section>
+
+                    <Section no="03" title="Vocabulary Level-up" note="B1〜B2の語を、C1〜C2の表現へ">
+                      {result.vocab.length ? (
+                        <ul className="grid divide-y divide-neutral-950 border-y border-neutral-950 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                          {result.vocab.map((v) => (
+                            <VocabCell key={v.id} v={v} recall={recall} saved={isSaved(v.to)} onSave={save} />
+                          ))}
+                        </ul>
+                      ) : (
+                        <Empty>置き換え候補は見つかりませんでした。「very + 形容詞」を使うと提案が出ます。</Empty>
+                      )}
+                    </Section>
+                  </>
+                ) : (
+                  <div className="space-y-6 pb-16">
+                    {[0, 1, 2].map((i) => <div key={i} className="h-40 animate-pulse bg-stone-200" />)}
+                  </div>
+                )}
+              </div>
+            </Wrap>
+
+            {ready && (
+              <div className="relative h-96 border-y-2 border-neutral-950">
+                <Photo src={PHOTOS.summit} alt="A hiker resting on a mountain ledge" className="absolute inset-0 h-full w-full" depth={0.1} />
+                <div className="absolute inset-0 flex items-end bg-neutral-950/40 p-6 sm:p-10">
+                  <p className="text-5xl font-black leading-none tracking-tighter text-stone-100 sm:text-7xl">Now say it<br />out loud.</p>
                 </div>
-                <ol className="grid gap-px border border-neutral-950 bg-neutral-950 sm:grid-cols-4">
-                  {GUIDE.map(([t, d], i) => (
-                    <li key={t} className="bg-stone-100 p-4">
-                      <span className="text-sm font-bold tabular-nums">0{i + 1}</span>
-                      <p className="mt-2 text-lg font-black">{t}</p>
-                      <p className="mt-1 text-xs leading-relaxed text-neutral-600">{d}</p>
-                    </li>
-                  ))}
-                </ol>
-                <p className="mt-2 text-xs text-neutral-600">簡易ルールで分析します。登録済みの表現パターンだけを検出し、見つからない場合は「該当なし」と表示します。</p>
               </div>
             )}
 
-            <Section no="01" title="Output Workspace" note="日記、意見、スピーチ原稿など。話すつもりで書いてください。">
-              <div className="grid gap-x-10 gap-y-6 md:grid-cols-3">
-                <div>
-                  <p className="text-sm text-neutral-600">今日のお題</p>
-                  <p className="mt-2 text-2xl font-bold leading-snug tracking-tight">{PROMPTS[promptIdx]}</p>
-                  <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2">
-                    <button onClick={() => setPromptIdx((i) => (i + 1) % PROMPTS.length)} className={`${linkBtn} inline-flex items-center gap-1.5`}><Shuffle size={13} />別のお題</button>
-                    <button onClick={() => setText(SAMPLE)} className={`${linkBtn} inline-flex items-center gap-1.5`}><RotateCcw size={13} />サンプルに戻す</button>
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <textarea
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    placeholder="Write the way you would say it out loud..."
-                    className="h-56 w-full resize-none border border-neutral-950 bg-white p-4 text-lg leading-relaxed placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-950"
-                  />
-                  <p className="mt-2 text-xs tabular-nums text-neutral-600">{words} words</p>
-                  <button
-                    onClick={run}
-                    disabled={!words || status === "loading"}
-                    className="mt-4 flex w-full items-center justify-between bg-neutral-950 px-6 py-5 text-xl font-black text-stone-100 transition hover:bg-yellow-300 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-neutral-950 disabled:hover:text-stone-100"
-                  >
-                    <span>{status === "loading" ? "Analyzing…" : "添削・分析を実行"}</span>
-                    {status === "loading" ? <Loader2 size={22} className="animate-spin" /> : <span>→</span>}
-                  </button>
-                  {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-                </div>
+            <Wrap>
+              <div className="pt-16">
+                {ready && (
+                  <Section no="04" title="Shadowing Script" note="あなたの伝えたかったことを、話し言葉に書き換えました。">
+                    {result.script.length ? (
+                      <ShadowingScript key={result.script.join("|")} lines={result.script} />
+                    ) : (
+                      <Empty>英文を入力して分析を実行すると、話し言葉の台本が作られます。</Empty>
+                    )}
+                  </Section>
+                )}
               </div>
-            </Section>
-
-            {status === "loading" ? (
-              <div className="space-y-6 pb-16">
-                {[0, 1, 2].map((i) => <div key={i} className="h-40 animate-pulse bg-stone-200" />)}
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-end justify-between gap-6 border-t-2 border-neutral-950 py-8">
-                  <div className="flex items-end gap-3">
-                    <span className="text-8xl font-black leading-none tracking-tighter tabular-nums">{result.score}</span>
-                    <span className="pb-2 text-sm text-neutral-600">/ 100<br />自然さスコア</span>
-                  </div>
-                  <div>
-                    <button
-                      onClick={() => setRecall((r) => !r)}
-                      aria-pressed={recall}
-                      className={`border border-neutral-950 px-4 py-3 text-sm font-bold transition ${recall ? "bg-neutral-950 text-stone-100" : "hover:bg-yellow-300"}`}
-                    >
-                      <Eye size={14} className="mr-2 inline" />Active Recall: {recall ? "ON" : "OFF"}
-                    </button>
-                    <p className="mt-2 max-w-xs text-xs text-neutral-600">オンにすると答えを隠します。先に自分で言い直してから確認できます。</p>
-                  </div>
-                </div>
-
-                <Section no="02" title="Collocation Audit" note="文法は合っているが、ネイティブは言わない組み合わせ">
-                  {result.collocations.length ? (
-                    <ul className="border-t border-neutral-950 pt-6">
-                      {result.collocations.map((c) => (
-                        <CollocationRow key={c.id} c={c} recall={recall} saved={isSaved(c.good)} onSave={save} />
-                      ))}
-                    </ul>
-                  ) : (
-                    <Empty>不自然な組み合わせは見つかりませんでした。</Empty>
-                  )}
-                </Section>
-
-                <Section no="03" title="Vocabulary Level-up" note="B1〜B2の語を、C1〜C2の表現へ">
-                  {result.vocab.length ? (
-                    <ul className="grid divide-y divide-neutral-950 border-y border-neutral-950 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                      {result.vocab.map((v) => (
-                        <VocabCell key={v.id} v={v} recall={recall} saved={isSaved(v.to)} onSave={save} />
-                      ))}
-                    </ul>
-                  ) : (
-                    <Empty>置き換え候補は見つかりませんでした。「very + 形容詞」を使うと提案が出ます。</Empty>
-                  )}
-                </Section>
-
-                <Section no="04" title="Shadowing Script" note="あなたの伝えたかったことを、話し言葉に書き換えました。">
-                  {result.script.length ? (
-                    <ShadowingScript key={result.script.join("|")} lines={result.script} />
-                  ) : (
-                    <Empty>英文を入力して分析を実行すると、話し言葉の台本が作られます。</Empty>
-                  )}
-                </Section>
-              </>
-            )}
+            </Wrap>
           </>
         )}
       </main>
 
-      <footer className="border-t-2 border-neutral-950 px-5 py-16 text-center">
-        <p className="text-4xl font-black leading-tight tracking-tighter sm:text-6xl">
-          WRITE IT.<br />FIX IT.<br />SAY IT OUT LOUD.
-        </p>
-        <p className="mt-8 text-xs text-neutral-600">UI mockup with a rule-based demo engine.</p>
-        <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className={`${linkBtn} mt-3`}>Back to the top ↑</button>
+      <Marquee items={MARQUEE} dark reverse />
+
+      <footer className="relative border-t-2 border-neutral-950 text-stone-100">
+        <Photo src={PHOTOS.pencil} alt="Spiral notebooks and a pencil" className="absolute inset-0 h-full w-full" />
+        <div className="relative bg-neutral-950/70 px-5 py-24 text-center">
+          <p className="text-4xl font-black leading-tight tracking-tighter sm:text-6xl">
+            WRITE IT.<br />FIX IT.<br />SAY IT OUT LOUD.
+          </p>
+          <p className="mt-8 text-xs">UI mockup with a rule-based demo engine. Photos from Pexels (free to use).</p>
+          <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className={`${linkBtn} mt-3 hover:text-neutral-950`}>Back to the top ↑</button>
+        </div>
       </footer>
     </div>
   );
