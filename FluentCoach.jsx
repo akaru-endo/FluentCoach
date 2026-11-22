@@ -5,7 +5,7 @@
  * (COLLOCATION_RULES / UPGRADES below) checks whatever you type. No API key needed.
  * Stack: React 18 + Tailwind CSS (core utilities only) + lucide-react
  * Design: editorial, square-cornered, hairline rules, heavy type on warm grey paper.
- * Images: hotlinked from Pexels (free license). <Photo> falls back to a flat block if a URL fails.
+ * Images: hotlinked from Unsplash (free license). <Photo> falls back to a flat block if a URL fails.
  * Motion: marquee, scroll reveal, parallax photos, count-up score (all respect reduced-motion).
  *
  * Where to plug in a real backend:
@@ -43,14 +43,11 @@ const WEEK = [["月", 3], ["火", 5], ["水", 2], ["木", 6], ["金", 4], ["土"
 
 /* ------------------------------ Analyzer ------------------------------ */
 
-// Optional: URL of your own backend that wraps an LLM. It receives POST { text } and must
-// return the same shape as analyzeLocal(). Leave empty to use the built-in rules below.
 const API_ENDPOINT = "";
 
 const MAX_COLLOCATIONS = 4;
 const MAX_VOCAB = 3;
 
-// [pattern, natural replacement ($1, $2 allowed), explanation]
 const COLLOCATION_RULES = [
   [/\b(?:made|make|makes|making) a decision to\b/i, "decided to", "「make a decision to ~」は文法的には正しいものの硬い言い方です。会話では decide to ~ の1語で済ませるのが自然です。"],
   [/\b(go|goes|going|went) to (?:a |an |the )?(hiking|shopping|swimming|fishing|camping|skiing|jogging|cycling|running)\b/i, "$1 $2", "hiking や shopping のような活動は go + -ing で表し、to も冠詞も付けません。"],
@@ -64,7 +61,6 @@ const COLLOCATION_RULES = [
   [/\b(?:big|strong) (rain|snow)\b/i, "heavy $1", "雨や雪の強さは big / strong ではなく heavy で表します。"],
 ];
 
-// adjective -> [upgrade, level, example, note]. Matched after very / really / so / extremely / pretty.
 const UPGRADES = {
   beautiful: ["breathtaking", "C1", "The view from the ridge was absolutely breathtaking.", "very + 形容詞を、強い意味を持つ形容詞1語に置き換える。"],
   tired: ["wiped out", "C1", "I was completely wiped out by the time we got home.", "exhausted より口語的。疲れ切って動けない感じ。"],
@@ -93,12 +89,10 @@ const CONTRACTIONS = [
   [/\bit is\b/gi, "it's"], [/\bthat is\b/gi, "that's"],
 ];
 
-// Fillers rotate by sentence. "pre" goes in front, "post" goes at the end. null = none.
 const FILLERS = [["pre", "So,"], null, ["pre", "I mean,"], ["post", "you know?"], ["pre", "honestly,"], ["pre", "Actually,"]];
 const LOWERABLE = /^(The|A|An|It|We|They|He|She|This|That|There|My|Our|Last|Next|Yesterday|Today|In|On|At|When|After|Before|Then|And|But|Also|Now|Here|You)\b/;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// {{...}} marks a filler / discourse marker so the UI can highlight it.
 const toSpoken = (sentence, i) => {
   let s = sentence.trim();
   COLLOCATION_RULES.forEach(([re, to]) => { s = s.replace(re, to); });
@@ -150,7 +144,7 @@ const analyzeText = async (text) => {
     if (!res.ok) throw new Error(`API error ${res.status}`);
     return res.json();
   }
-  await new Promise((r) => setTimeout(r, 600)); // short pause so the loading state is visible
+  await new Promise((r) => setTimeout(r, 600)); 
   return analyzeLocal(text);
 };
 
@@ -167,21 +161,19 @@ const CSS = `
   .reveal { opacity: 1; transform: none; transition: none; }
 }`;
 
-// Free-to-use photos from Pexels (https://www.pexels.com/license/). Hotlinked; swap for local files if you prefer.
-const px = (id, name) => `https://images.pexels.com/photos/${id}/${name}.jpeg?auto=compress&cs=tinysrgb&w=1400`;
+// 修正箇所：Pexelsから直リンク可能なUnsplashの画像に差し替えました
 const PHOTOS = {
-  ridge: px(2114206, "pexels-photo-2114206"),
-  write: px(3201466, "pexels-photo-3201466"),
-  hand: px(210661, "pexels-photo-210661"),
-  summit: px(3589228, "pexels-photo-3589228"),
-  pencil: px(159865, "notepad-pencil-green-black-159865"),
+  ridge: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1400&q=80",
+  write: "https://images.unsplash.com/photo-1455390582262-044cdead27d8?auto=format&fit=crop&w=1400&q=80",
+  hand: "https://images.unsplash.com/photo-1586281380349-632531db7ed4?auto=format&fit=crop&w=1400&q=80",
+  summit: "https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1400&q=80",
+  pencil: "https://images.unsplash.com/photo-1517842645767-c639042777db?auto=format&fit=crop&w=1400&q=80",
 };
 
 const MARQUEE = ["make a point of", "lucked out", "wiped out", "over the moon", "itching to go", "pick up the tab", "a blessing in disguise", "meticulous", "breathtaking", "you know?"];
 
 const Wrap = ({ children }) => <div className="mx-auto max-w-6xl px-5">{children}</div>;
 
-// Fades a block up the first time it scrolls into view.
 function Reveal({ children }) {
   const ref = useRef(null);
   const [on, setOn] = useState(false);
@@ -195,8 +187,6 @@ function Reveal({ children }) {
   return <div ref={ref} className={`reveal ${on ? "in" : ""}`}>{children}</div>;
 }
 
-// Photo frame: grayscale until hovered, slow zoom on hover, optional scroll parallax (depth),
-// and a flat fallback block if the image URL fails. Pass "relative" or "absolute" in className.
 function Photo({ src, alt, className = "", depth = 0 }) {
   const box = useRef(null);
   const [dy, setDy] = useState(0);
@@ -248,7 +238,6 @@ function Marquee({ items, dark = false, reverse = false }) {
   );
 }
 
-// Thin reading-progress bar. Updates the DOM directly so scrolling does not re-render the app.
 function ScrollBar() {
   const ref = useRef(null);
   useEffect(() => {
@@ -280,7 +269,6 @@ const useCountUp = (to) => {
   return v;
 };
 
-// Each letter lifts when hovered.
 const Letters = ({ text }) =>
   text.split("").map((ch, i) =>
     ch === " " ? (
@@ -380,7 +368,6 @@ const renderLine = (s) =>
     p.startsWith("{{") ? <mark key={i} className="bg-yellow-300 px-1 text-neutral-950">{p.slice(2, -2)}</mark> : <span key={i}>{p}</span>
   );
 
-// Playback is a UI mock: a timer walks through the lines. Swap in Web Speech API / TTS here.
 function ShadowingScript({ lines }) {
   const [cur, setCur] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -534,7 +521,7 @@ export default function FluentCoach() {
   const [tab, setTab] = useState("workspace");
   const [text, setText] = useState(SAMPLE);
   const [promptIdx, setPromptIdx] = useState(0);
-  const [status, setStatus] = useState("done"); // "idle" | "loading" | "done"
+  const [status, setStatus] = useState("done");
   const [result, setResult] = useState(() => analyzeLocal(SAMPLE));
   const [error, setError] = useState("");
   const [recall, setRecall] = useState(false);
@@ -751,7 +738,7 @@ export default function FluentCoach() {
           <p className="text-4xl font-black leading-tight tracking-tighter sm:text-6xl">
             WRITE IT.<br />FIX IT.<br />SAY IT OUT LOUD.
           </p>
-          <p className="mt-8 text-xs">UI mockup with a rule-based demo engine. Photos from Pexels (free to use).</p>
+          <p className="mt-8 text-xs">UI mockup with a rule-based demo engine. Photos from Unsplash (free to use).</p>
           <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className={`${linkBtn} mt-3 hover:text-neutral-950`}>Back to the top ↑</button>
         </div>
       </footer>
